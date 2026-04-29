@@ -116,7 +116,113 @@ def format_game(game: dict[str, Any]) -> str:
     return line
 
 
-def build_results_message(games: list[dict[str, Any]], game_date: date, team_filter: str | None = None) -> str:
+def get_team_label(team: dict[str, Any]) -> str:
+    """Return a compact team label for box score tables."""
+    return team.get("abbreviation") or team.get("name", "Team")
+
+
+def get_line_total(
+    linescore: dict[str, Any],
+    innings: list[dict[str, Any]],
+    side: str,
+    key: str,
+) -> int | None:
+    total = linescore.get("teams", {}).get(side, {}).get(key)
+    if total is not None:
+        return total
+
+    inning_values = [inning.get(side, {}).get(key) for inning in innings]
+    if any(value is None for value in inning_values):
+        return None
+    return sum(inning_values)
+
+
+def format_game_boxscore(game: dict[str, Any]) -> str:
+    """Format a completed game as a box score."""
+    teams = game["teams"]
+    away = teams["away"]
+    home = teams["home"]
+    away_name = away["team"]["name"]
+    home_name = home["team"]["name"]
+    away_score = away.get("score", 0)
+    home_score = home.get("score", 0)
+    return f"  {away_name} {away_score}, {home_name} {home_score} - Final"
+
+
+def format_detailed_boxscore(game: dict[str, Any]) -> str:
+    """Format a completed game as an inning-by-inning box score."""
+    status = game.get("status", {}).get("detailedState")
+    if status not in {"Final", "Game Over"}:
+        return format_game(game)
+
+    linescore = game.get("linescore", {})
+    innings = linescore.get("innings") or []
+    if not innings:
+        return format_game_boxscore(game)
+
+    teams = game["teams"]
+    away = teams["away"]
+    home = teams["home"]
+    away_team = away["team"]
+    home_team = home["team"]
+
+    away_runs = away.get("score")
+    home_runs = home.get("score")
+    away_hits = get_line_total(linescore, innings, "away", "hits")
+    home_hits = get_line_total(linescore, innings, "home", "hits")
+    away_errors = get_line_total(linescore, innings, "away", "errors")
+    home_errors = get_line_total(linescore, innings, "home", "errors")
+
+    if None in {away_runs, home_runs, away_hits, home_hits, away_errors, home_errors}:
+        return format_game_boxscore(game)
+
+    inning_labels = [str(inning.get("num", index + 1)) for index, inning in enumerate(innings)]
+    away_innings = [str(inning.get("away", {}).get("runs", "")) for inning in innings]
+    home_innings = [str(inning.get("home", {}).get("runs", "")) for inning in innings]
+
+    rows = [
+        ["Team", *inning_labels, "R", "H", "E"],
+        [
+            get_team_label(away_team),
+            *away_innings,
+            str(away_runs),
+            str(away_hits),
+            str(away_errors),
+        ],
+        [
+            get_team_label(home_team),
+            *home_innings,
+            str(home_runs),
+            str(home_hits),
+            str(home_errors),
+        ],
+    ]
+    widths = [max(len(row[column]) for row in rows) for column in range(len(rows[0]))]
+    table_lines = [
+        " ".join(value.rjust(widths[index]) for index, value in enumerate(row))
+        for row in rows
+    ]
+
+    return (
+        f"**{away_team['name']} {away_runs}, {home_team['name']} {home_runs} - {status}**\n"
+        "```text\n"
+        + "\n".join(table_lines)
+        + "\n```"
+    )
+
+
+def format_game_for_results(game: dict[str, Any], box_score: bool) -> str:
+    if box_score:
+        return format_detailed_boxscore(game)
+    return format_game(game)
+
+
+def build_results_message(
+    games: list[dict[str, Any]],
+    game_date: date,
+    team_filter: str | None = None,
+    box_score: bool = False,
+) -> str:
     readable_date = f"{game_date:%B} {game_date.day}, {game_date.year}"
 
     header = "MLB games"
@@ -128,11 +234,16 @@ def build_results_message(games: list[dict[str, Any]], game_date: date, team_fil
         suffix = f" for {team_filter}" if team_filter else ""
         return f"No MLB games found for {readable_date}{suffix}."
 
-    formatted_games = "\n".join(format_game(game) for game in games)
+    formatted_games = "\n".join(format_game_for_results(game, box_score) for game in games)
     return f"{header}\n{formatted_games}"
 
 
-def build_notification_message(yesterday_games: list[dict], today_games: list[dict], team_name: str | None) -> str:
+def build_notification_message(
+    yesterday_games: list[dict],
+    today_games: list[dict],
+    team_name: str | None,
+    box_score: bool = False,
+) -> str:
     """Build a notification message with yesterday's results and today's games."""
     lines = []
     
@@ -148,7 +259,10 @@ def build_notification_message(yesterday_games: list[dict], today_games: list[di
     if yesterday_results:
         lines.append("📅 **Yesterday's Results:**")
         for game in yesterday_results:
-            lines.append(format_game_boxscore(game))
+            if box_score:
+                lines.append(format_detailed_boxscore(game))
+            else:
+                lines.append(format_game_boxscore(game))
         lines.append("")
     
     # Today's games
@@ -161,19 +275,6 @@ def build_notification_message(yesterday_games: list[dict], today_games: list[di
         lines.append("No games scheduled.")
     
     return "\n".join(lines)
-
-
-def format_game_boxscore(game: dict[str, Any]) -> str:
-    """Format a completed game as a box score."""
-    teams = game["teams"]
-    away = teams["away"]
-    home = teams["home"]
-    away_name = away["team"]["name"]
-    home_name = home["team"]["name"]
-    away_score = away.get("score", 0)
-    home_score = home.get("score", 0)
-    return f"  {away_name} {away_score}, {home_name} {home_score} - Final"
-
 
 class MlbBot(commands.Bot):
     def __init__(self) -> None:
@@ -205,7 +306,8 @@ class MlbBot(commands.Bot):
                 message = build_notification_message(
                     yesterday_games, 
                     today_games, 
-                    schedule.team_name
+                    schedule.team_name,
+                    schedule.box_score,
                 )
                 
                 channel = self.get_channel(schedule.channel_id)
@@ -221,7 +323,13 @@ bot = MlbBot()
 @bot.tree.command(name="mlb", description="Show MLB game results for a date.")
 @app_commands.describe(day="Optional date in YYYY-MM-DD format. Defaults to today.")
 @app_commands.describe(team="Optional team name (e.g., Yankees, Mets, Dodgers)")
-async def mlb(interaction: discord.Interaction, day: str | None = None, team: str | None = None) -> None:
+@app_commands.describe(box_score="Show detailed box scores for completed games.")
+async def mlb(
+    interaction: discord.Interaction,
+    day: str | None = None,
+    team: str | None = None,
+    box_score: bool = False,
+) -> None:
     await interaction.response.defer(thinking=True)
 
     game_date = parse_date(day)
@@ -248,11 +356,14 @@ async def mlb(interaction: discord.Interaction, day: str | None = None, team: st
         )
         return
 
-    await interaction.followup.send(build_results_message(games, game_date, team_filter))
+    await interaction.followup.send(build_results_message(games, game_date, team_filter, box_score))
 
 
-@bot.tree.command(name="schedule", description="Manage MLB game notifications.")
-async def schedule(interaction: discord.Interaction) -> None:
+schedule = app_commands.Group(name="schedule", description="Manage MLB game notifications.")
+
+
+@schedule.command(name="help", description="Show MLB notification schedule help.")
+async def schedule_help(interaction: discord.Interaction) -> None:
     """Show help for schedule commands."""
     await interaction.response.send_message(
         "Use `/schedule add` to create a notification, `/schedule list` to view your schedules, or `/schedule remove` to delete one.",
@@ -263,7 +374,13 @@ async def schedule(interaction: discord.Interaction) -> None:
 @schedule.command(name="add", description="Add a daily MLB game notification.")
 @app_commands.describe(team="Team name (e.g., Yankees, Mets, Dodgers) or leave empty for all")
 @app_commands.describe(time="Time to receive notification (e.g., 14:00 for 2 PM)")
-async def schedule_add(interaction: discord.Interaction, team: str | None, time: str) -> None:
+@app_commands.describe(box_score="Show detailed box scores for completed games.")
+async def schedule_add(
+    interaction: discord.Interaction,
+    time: str,
+    team: str | None = None,
+    box_score: bool = False,
+) -> None:
     """Add a new schedule for daily notifications."""
     await interaction.response.defer(ephemeral=True)
     
@@ -296,12 +413,14 @@ async def schedule_add(interaction: discord.Interaction, team: str | None, time:
         channel_id=interaction.channel_id,
         team_id=team_id,
         team_name=team_name,
-        time=time
+        time=time,
+        box_score=box_score,
     )
+    box_score_text = " with detailed box scores" if box_score else ""
     
     await interaction.followup.send(
         f"✅ Schedule created! ID: `{schedule.id}`\n"
-        f"You'll receive MLB game updates for **{team_name}** at **{time}** daily in this channel.",
+        f"You'll receive MLB game updates for **{team_name}** at **{time}** daily in this channel{box_score_text}.",
         ephemeral=True
     )
 
@@ -321,7 +440,8 @@ async def schedule_list(interaction: discord.Interaction) -> None:
     lines = ["**Your schedules:**"]
     for s in channel_schedules:
         status = "✅" if s.enabled else "❌"
-        lines.append(f"`{s.id}` - {s.team_name} at **{s.time}** {status}")
+        detail = " detailed box scores" if s.box_score else ""
+        lines.append(f"`{s.id}` - {s.team_name} at **{s.time}**{detail} {status}")
     
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
@@ -359,6 +479,9 @@ async def schedule_toggle(interaction: discord.Interaction, schedule_id: str) ->
         f"✅ Schedule `{schedule_id}` {status}.",
         ephemeral=True
     )
+
+
+bot.tree.add_command(schedule)
 
 
 @bot.event

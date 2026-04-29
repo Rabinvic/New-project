@@ -31,6 +31,18 @@ Shows today's MLB games and results.
 
 Shows MLB games and results for a specific date.
 
+`/mlb box_score:True`
+
+Shows detailed inning-by-inning box scores for completed games.
+
+`/mlb team:Yankees box_score:True`
+
+Shows detailed box scores for completed Yankees games.
+
+`/schedule add team:Yankees time:09:00 box_score:True`
+
+Creates a daily Yankees notification with detailed box scores for completed games.
+
 ## Discord Invite Permissions
 
 When inviting the bot, include these scopes:

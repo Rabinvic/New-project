@@ -1,7 +1,7 @@
 """Schedule data model and storage for MLB game notifications."""
 import json
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +16,7 @@ class Schedule:
     team_id: int | None  # None = all teams
     team_name: str  # Human-readable team name for display
     time: str  # HH:MM format in 24-hour
+    box_score: bool = False
     enabled: bool = True
 
     def to_dict(self) -> dict[str, Any]:
@@ -25,6 +26,7 @@ class Schedule:
             "team_id": self.team_id,
             "team_name": self.team_name,
             "time": self.time,
+            "box_score": self.box_score,
             "enabled": self.enabled,
         }
 
@@ -36,6 +38,7 @@ class Schedule:
             team_id=data["team_id"],
             team_name=data["team_name"],
             time=data["time"],
+            box_score=data.get("box_score", False),
             enabled=data.get("enabled", True),
         )
 
@@ -58,7 +61,13 @@ def save_schedules(schedules: list[Schedule]) -> None:
         json.dump([s.to_dict() for s in schedules], f, indent=2)
 
 
-def add_schedule(channel_id: int, team_id: int | None, team_name: str, time: str) -> Schedule:
+def add_schedule(
+    channel_id: int,
+    team_id: int | None,
+    team_name: str,
+    time: str,
+    box_score: bool = False,
+) -> Schedule:
     """Add a new schedule and return it."""
     schedules = load_schedules()
     new_schedule = Schedule(
@@ -67,6 +76,7 @@ def add_schedule(channel_id: int, team_id: int | None, team_name: str, time: str
         team_id=team_id,
         team_name=team_name,
         time=time,
+        box_score=box_score,
         enabled=True,
     )
     schedules.append(new_schedule)
