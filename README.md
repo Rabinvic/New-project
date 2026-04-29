@@ -1,3 +1,6 @@
+This is an attempt at learning how to use AI models to create programming projects.
+This is my first time using a model, in this case GPT 5.5 through Codex to "vibe" code
+
 # MLB Discord Bot
 
 A Python Discord bot that returns MLB game results using Discord slash commands.
