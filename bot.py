@@ -7,11 +7,13 @@ import httpx
 from discord import app_commands
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
+from numpy import record
 
 import schedules
 
 
 MLB_SCHEDULE_URL = "https://statsapi.mlb.com/api/v1/schedule"
+MLB_STANDINGS_URL = "https://statsapi.mlb.com/api/v1/standings"
 
 # Team name/abbreviation to MLB team ID mapping
 TEAMS: dict[str, int] = {
@@ -51,6 +53,18 @@ TEAMS: dict[str, int] = {
     "giants": 137, "sf": 137, "san francisco": 137, "san francisco giants": 137,
     "diamondbacks": 109, "ari": 109, "az": 109, "arizona": 109, "arizona diamondbacks": 109, "snakes": 109,
     "rockies": 115, "col": 115, "colorado": 115, "colorado rockies": 115,
+}
+
+# Codes for the leageues and divisions, used for fetching standings
+LEAGUES = {
+    "american league": 103, "al": 103, "american": 103, 103:"American League",
+    "al east": 201, "american league east": 201, 201: "American League East",
+    "al central": 202, "american league central": 202, 202: "American League Central",
+    "al west": 203, "american league west": 203, 203: "American League West",
+    "national league": 104, "nl": 104, "national": 104, 104: "National League",
+    "nl east": 204, "national league east": 204, 204: "National League East",
+    "nl central": 205, "national league central": 205, 205: "National League Central",
+    "nl west": 206, "national league west": 206, 206: "National League West"
 }
 
 load_dotenv()
@@ -320,6 +334,45 @@ class MlbBot(commands.Bot):
 bot = MlbBot()
 
 
+
+async def sync_command_tree() -> list[app_commands.AppCommand]:
+    return await bot.tree.sync()
+
+
+@bot.tree.command(name="sync", description="Sync slash commands after adding or changing commands.")
+@app_commands.checks.has_permissions(administrator=True)
+async def sync(interaction: discord.Interaction) -> None:
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    try:
+        synced = await sync_command_tree()
+    except discord.HTTPException:
+        await interaction.followup.send(
+            "I couldn't sync commands with Discord right now. Please try again in a minute.",
+            ephemeral=True,
+        )
+        return
+
+    
+    await interaction.followup.send(
+        f"Synced {len(synced)} command(s) to {"global"}.",
+        ephemeral=True,
+    )
+
+
+@sync.error
+async def sync_error(interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
+    if isinstance(error, app_commands.MissingPermissions):
+        message = "You need administrator permission to sync commands."
+    else:
+        message = str(error)
+
+    if interaction.response.is_done():
+        await interaction.followup.send(message, ephemeral=True)
+    else:
+        await interaction.response.send_message(message, ephemeral=True)
+
+
 @bot.tree.command(name="mlb", description="Show MLB game results for a date.")
 @app_commands.describe(day="Optional date in YYYY-MM-DD format. Defaults to today.")
 @app_commands.describe(team="Optional team name (e.g., Yankees, Mets, Dodgers)")
@@ -357,6 +410,37 @@ async def mlb(
         return
 
     await interaction.followup.send(build_results_message(games, game_date, team_filter, box_score))
+
+@bot.tree.command(name="standings", description="Show MLB standings")
+async def standings(interaction: discord.Interaction) -> None:
+    await interaction.response.defer(thinking=True)
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.get(MLB_STANDINGS_URL, params={"leagueId": "103,104", "division":"all"})
+            response.raise_for_status()
+            payload = response.json()
+    except httpx.HTTPError:
+        await interaction.followup.send(
+            "I couldn't reach the MLB standings service right now. Please try again in a minute."
+        )
+        return
+
+    lines = ["**MLB Standings:**"]
+    for record in payload.get("records", []):
+        league = record.get("league", {}).get("id")
+        league_name = LEAGUES.get(league, f"Unknown League ({league})")
+
+        division = record.get("division", {}).get("id")
+        division_name = LEAGUES.get(division, f"Unknown Division ({division})")
+        lines.append(f"\n__{division_name}__")
+        for team_record in record.get("teamRecords", []):
+            team_name = team_record.get("team", {}).get("name", "Unknown Team")
+            wins = team_record.get("wins", 0)
+            losses = team_record.get("losses", 0)
+            lines.append(f"{team_name}: {wins}-{losses}")
+
+    await interaction.followup.send("\n".join(lines))
 
 
 schedule = app_commands.Group(name="schedule", description="Manage MLB game notifications.")
@@ -481,7 +565,9 @@ async def schedule_toggle(interaction: discord.Interaction, schedule_id: str) ->
     )
 
 
+
 bot.tree.add_command(schedule)
+
 
 
 @bot.event
@@ -494,6 +580,7 @@ def main() -> None:
     if not token:
         raise RuntimeError("Set DISCORD_TOKEN in your environment or .env file.")
     bot.run(token)
+    
 
 
 if __name__ == "__main__":
